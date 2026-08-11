@@ -1,4 +1,4 @@
-VERSION ?= 0.4.0
+VERSION ?= 0.4.1
 BINARY := bin/grok-switch
 LDFLAGS := -s -w -X github.com/bbbkawaii/GrokSwitch/internal/cli.Version=$(VERSION)
 

@@ -24,7 +24,7 @@ import (
 
 var Version = "dev"
 
-const usage = `GrokSwitch - switch Grok Build accounts safely
+const usage = `GrokSwitch - manage and switch Grok Build accounts
 
 Usage:
   grok-switch <command> [options]
@@ -37,7 +37,7 @@ Account commands:
                               Save the current Grok login
   login [--alias NAME]        Log in through an isolated Grok auth file
         [--device-auth]
-  import FILE [--alias NAME]  Import an auth.json without exposing tokens
+  import FILE [--alias NAME]  Import an auth.json or CPA OAuth file
         [--switch] [--cpa] [--json]
   switch, use [QUERY] [--json] [--offline]
                               Switch globally; prompts when QUERY is omitted
@@ -47,7 +47,7 @@ Account commands:
   run QUERY [-- GROK_ARGS]    Run Grok with an isolated saved account
 
 Diagnostics:
-  doctor [--json]             Validate Grok, paths, permissions, and snapshots
+  doctor [--json]             Validate Grok, paths, and account snapshots
   version                     Print the GrokSwitch version
   help                        Show this help
 
