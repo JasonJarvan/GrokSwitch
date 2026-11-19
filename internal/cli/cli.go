@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,10 +17,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/accounts"
-	"github.com/bbbkawaii/GrokSwitch/internal/app"
-	"github.com/bbbkawaii/GrokSwitch/internal/billing"
-	"github.com/bbbkawaii/GrokSwitch/internal/grokauth"
+	"github.com/JasonJarvan/GrokSwitch/internal/accounts"
+	"github.com/JasonJarvan/GrokSwitch/internal/app"
+	"github.com/JasonJarvan/GrokSwitch/internal/billing"
+	"github.com/JasonJarvan/GrokSwitch/internal/grokauth"
 )
 
 var Version = "dev"
@@ -44,6 +45,8 @@ Account commands:
   previous [--json]           Switch back to the previous account
   alias QUERY NAME [--json]   Rename a saved account
   remove QUERY [--json]       Remove an account; active removal picks a fallback
+  refresh [QUERY|--all]       Refresh expired xAI OIDC tokens
+        [--force] [--json]
   run QUERY [-- GROK_ARGS]    Run Grok with an isolated saved account
 
 Diagnostics:
@@ -113,6 +116,8 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 		runErr = commandAlias(application, args[1:], out)
 	case "remove", "rm":
 		runErr = commandRemove(application, args[1:], out)
+	case "refresh", "refresh-tokens":
+		runErr = commandRefresh(application, args[1:], out)
 	case "run":
 		runErr = commandRun(application, args[1:])
 	case "doctor":
@@ -135,7 +140,7 @@ func isKnownCommand(command string) bool {
 	switch command {
 	case "list", "ls", "status", "save", "add", "login", "import",
 		"switch", "use", "previous", "prev", "alias", "rename", "remove",
-		"rm", "run", "doctor":
+		"rm", "refresh", "refresh-tokens", "run", "doctor":
 		return true
 	default:
 		return false
@@ -479,6 +484,74 @@ func commandRemove(application *app.App, args []string, out io.Writer) error {
 		fmt.Fprintf(out, "; switched to %s (close older global Grok sessions before starting a new one)", activated)
 	}
 	fmt.Fprintln(out, ".")
+	return nil
+}
+
+func commandRefresh(application *app.App, args []string, out io.Writer) error {
+	opts, err := parseOptions(args, nil, []string{"all", "force", "json"})
+	if err != nil {
+		return err
+	}
+	if len(opts.positionals) > 1 {
+		return errors.New("usage: grok-switch refresh [QUERY|--all] [--force] [--json]")
+	}
+	if opts.bools["all"] && len(opts.positionals) > 0 {
+		return errors.New("choose either a specific account QUERY or --all, not both")
+	}
+	query := ""
+	if len(opts.positionals) == 1 {
+		query = opts.positionals[0]
+	}
+
+	results, err := application.Refresh(context.Background(), query, opts.bools["force"])
+	if err != nil {
+		return err
+	}
+
+	allOK := true
+	failedCount := 0
+	for _, res := range results {
+		if res.Status == app.RefreshStatusFailed {
+			allOK = false
+			failedCount++
+		}
+	}
+
+	if opts.bools["json"] {
+		if err := writeJSON(out, struct {
+			OK      bool                `json:"ok"`
+			Results []app.RefreshResult `json:"results"`
+		}{allOK, results}); err != nil {
+			return err
+		}
+	} else {
+		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "ALIAS\tSTATUS\tEXPIRES AT\tDETAIL")
+		for _, res := range results {
+			expiresDisplay := formatResetTime(res.ExpiresAt)
+			detail := "-"
+			switch res.Status {
+			case app.RefreshStatusRefreshed:
+				if res.RefreshRotated {
+					detail = "token refreshed (refresh token rotated)"
+				} else {
+					detail = "token refreshed"
+				}
+			case app.RefreshStatusSynced:
+				detail = "snapshot synced from active auth"
+			case app.RefreshStatusSkipped:
+				detail = "still valid (use --force to refresh)"
+			case app.RefreshStatusFailed:
+				detail = res.Error
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Alias, res.Status, expiresDisplay, detail)
+		}
+		_ = w.Flush()
+	}
+
+	if !allOK {
+		return fmt.Errorf("failed to refresh %d account(s)", failedCount)
+	}
 	return nil
 }
 

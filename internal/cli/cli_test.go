@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/accounts"
-	"github.com/bbbkawaii/GrokSwitch/internal/billing"
+	"github.com/JasonJarvan/GrokSwitch/internal/accounts"
+	"github.com/JasonJarvan/GrokSwitch/internal/billing"
 )
 
 func TestImportAndListJSONNeverExposeToken(t *testing.T) {
@@ -177,6 +177,45 @@ func TestCommandHelpDoesNotNeedFilesystemState(t *testing.T) {
 func TestRunPassesHelpAfterSeparatorToGrok(t *testing.T) {
 	if hasHelpFlag([]string{"account", "--", "--help"}) {
 		t.Fatal("--help after the passthrough separator must be handled by Grok")
+	}
+}
+
+func TestRefreshCommandValidationAndSkippedJSONNeverLeaksSecret(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GROK_HOME", filepath.Join(root, ".grok"))
+	t.Setenv("GROK_SWITCH_HOME", filepath.Join(root, ".grok", "accounts"))
+	t.Setenv("GROK_AUTH_PATH", "")
+	t.Setenv("GROK_AUTH", "")
+
+	authPath := filepath.Join(root, "valid.json")
+	secretAccess := "secret-access-value"
+	secretRefresh := "secret-refresh-value"
+	auth := `{"https://auth.x.ai::client":{"key":"` + secretAccess + `","auth_mode":"oidc","create_time":"2026-08-01T00:00:00Z","user_id":"cli-refresh","email":"refresh@example.com","refresh_token":"` + secretRefresh + `","expires_at":"2030-01-01T00:00:00Z","oidc_issuer":"https://auth.x.ai","oidc_client_id":"client"}}`
+	if err := os.WriteFile(authPath, []byte(auth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"import", authPath, "--alias", "fresh", "--json"}, strings.NewReader(""), &out, &errOut); code != 0 {
+		t.Fatalf("import failed: %d %s %s", code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Run([]string{"refresh", "fresh", "--all"}, strings.NewReader(""), &out, &errOut); code == 0 {
+		t.Fatalf("expected error when both QUERY and --all are given")
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Run([]string{"refresh", "--all", "--json"}, strings.NewReader(""), &out, &errOut); code != 0 {
+		t.Fatalf("refresh --all --json failed: %d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if strings.Contains(out.String(), secretAccess) || strings.Contains(out.String(), secretRefresh) {
+		t.Fatalf("secret leaked in refresh JSON: %s", out.String())
+	}
+	if !strings.Contains(out.String(), `"status": "skipped"`) || !strings.Contains(out.String(), `"ok": true`) {
+		t.Fatalf("unexpected refresh JSON: %s", out.String())
 	}
 }
 

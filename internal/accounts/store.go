@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/fsutil"
-	"github.com/bbbkawaii/GrokSwitch/internal/grokauth"
+	"github.com/JasonJarvan/GrokSwitch/internal/fsutil"
+	"github.com/JasonJarvan/GrokSwitch/internal/grokauth"
 )
 
 const SchemaVersion = 1

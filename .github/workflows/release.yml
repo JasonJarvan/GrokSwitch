@@ -40,7 +40,7 @@ jobs:
             mkdir -p "$stage"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
               -trimpath \
-              -ldflags "-s -w -X github.com/bbbkawaii/GrokSwitch/internal/cli.Version=${VERSION#v}" \
+              -ldflags "-s -w -X github.com/JasonJarvan/GrokSwitch/internal/cli.Version=${VERSION#v}" \
               -o "${stage}/grok-switch${suffix}" \
               ./cmd/grok-switch
             cp README.md LICENSE "$stage/"

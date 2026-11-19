@@ -55,6 +55,22 @@ type Quota struct {
 	TierError        string   `json:"tierError,omitempty"`
 }
 
+// HTTPStatusError reports a non-2xx HTTP status from a Grok backend service.
+type HTTPStatusError struct {
+	Service    string
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("Grok %s service returned HTTP %d", e.Service, e.StatusCode)
+}
+
+// IsUnauthorized reports whether err is an HTTP 401 status error from Grok.
+func IsUnauthorized(err error) bool {
+	var statusErr *HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusUnauthorized
+}
+
 // Fetch calls the same credits endpoint used by Grok Build's /usage view.
 // Access tokens are used only in the Authorization header and never included
 // in returned errors.
@@ -80,7 +96,7 @@ func Fetch(ctx context.Context, client *http.Client, endpoint, clientVersion, ac
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Quota{}, fmt.Errorf("Grok quota service returned HTTP %d", resp.StatusCode)
+		return Quota{}, &HTTPStatusError{Service: "quota", StatusCode: resp.StatusCode}
 	}
 
 	const maxResponse = 1 << 20
@@ -124,7 +140,7 @@ func FetchTier(ctx context.Context, client *http.Client, endpoint, clientVersion
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Grok tier service returned HTTP %d", resp.StatusCode)
+		return "", &HTTPStatusError{Service: "tier", StatusCode: resp.StatusCode}
 	}
 	const maxResponse = 1 << 20
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))

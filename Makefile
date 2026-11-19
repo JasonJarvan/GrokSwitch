@@ -1,6 +1,6 @@
-VERSION ?= 0.4.1
+VERSION ?= 0.5.0
 BINARY := bin/grok-switch
-LDFLAGS := -s -w -X github.com/bbbkawaii/GrokSwitch/internal/cli.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/JasonJarvan/GrokSwitch/internal/cli.Version=$(VERSION)
 
 .PHONY: build install test test-race vet fmt-check check clean
 

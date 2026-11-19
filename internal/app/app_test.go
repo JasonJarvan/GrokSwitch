@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/accounts"
-	"github.com/bbbkawaii/GrokSwitch/internal/app"
-	"github.com/bbbkawaii/GrokSwitch/internal/filelock"
-	"github.com/bbbkawaii/GrokSwitch/internal/fsutil"
-	"github.com/bbbkawaii/GrokSwitch/internal/grokauth"
+	"github.com/JasonJarvan/GrokSwitch/internal/accounts"
+	"github.com/JasonJarvan/GrokSwitch/internal/app"
+	"github.com/JasonJarvan/GrokSwitch/internal/filelock"
+	"github.com/JasonJarvan/GrokSwitch/internal/fsutil"
+	"github.com/JasonJarvan/GrokSwitch/internal/grokauth"
 )
 
 func TestMain(m *testing.M) {

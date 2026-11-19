@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/grokauth"
+	"github.com/JasonJarvan/GrokSwitch/internal/grokauth"
 )
 
 func TestStoreUpsertResolveAndPermissions(t *testing.T) {

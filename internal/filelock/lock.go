@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/fsutil"
+	"github.com/JasonJarvan/GrokSwitch/internal/fsutil"
 )
 
 var ErrBusy = errors.New("credential file is busy")

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/cli"
+	"github.com/JasonJarvan/GrokSwitch/internal/cli"
 )
 
 func main() {

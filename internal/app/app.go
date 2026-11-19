@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bbbkawaii/GrokSwitch/internal/accounts"
-	"github.com/bbbkawaii/GrokSwitch/internal/billing"
-	"github.com/bbbkawaii/GrokSwitch/internal/filelock"
-	"github.com/bbbkawaii/GrokSwitch/internal/fsutil"
-	"github.com/bbbkawaii/GrokSwitch/internal/grokauth"
+	"github.com/JasonJarvan/GrokSwitch/internal/accounts"
+	"github.com/JasonJarvan/GrokSwitch/internal/billing"
+	"github.com/JasonJarvan/GrokSwitch/internal/filelock"
+	"github.com/JasonJarvan/GrokSwitch/internal/fsutil"
+	"github.com/JasonJarvan/GrokSwitch/internal/grokauth"
 )
 
 var (
@@ -38,6 +38,8 @@ type App struct {
 	HTTPClient        *http.Client
 	BillingURL        string
 	UserURL           string
+	TokenURL          string
+	RefreshSkew       time.Duration
 	GrokClientVersion string
 }
 
@@ -82,8 +84,9 @@ func (a *App) List() (*AccountList, error) {
 
 // FetchQuotas reads each saved account's current bearer and fetches its live
 // subscription tier plus the credits data used by Grok Build's /usage view.
-// Failures are isolated per account and endpoint so a network or auth problem
-// never prevents listing or switching.
+// Expired or HTTP 401 first-party xAI OIDC accounts are silently refreshed
+// when a refresh token is available. Failures are isolated per account and
+// endpoint so a network or auth problem never prevents listing or switching.
 func (a *App) FetchQuotas(list *AccountList) map[string]billing.Quota {
 	results := make(map[string]billing.Quota, len(list.Registry.Accounts))
 	if len(list.Registry.Accounts) == 0 {
@@ -97,8 +100,8 @@ func (a *App) FetchQuotas(list *AccountList) map[string]billing.Quota {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
-	for _, account := range list.Registry.Accounts {
-		account := account
+	for i, account := range list.Registry.Accounts {
+		i, account := i, account
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -112,6 +115,26 @@ func (a *App) FetchQuotas(list *AccountList) map[string]billing.Quota {
 				mu.Unlock()
 				return
 			}
+
+			refreshedOnce := false
+			var refreshErr error
+			if authFile.NeedsRefresh(a.Now(), a.refreshSkew()) {
+				if _, canRefresh := authFile.XAIRefreshCredential(); canRefresh {
+					refreshedOnce = true
+					if updated, _, err := a.RefreshAccount(context.Background(), account.ID, false); err == nil && updated != nil {
+						authFile = updated
+						mu.Lock()
+						list.Registry.Accounts[i].ExpiresAt = updated.Identity.ExpiresAt
+						if list.CurrentAccount == account.ID && list.CurrentIdentity != nil {
+							list.CurrentIdentity.ExpiresAt = updated.Identity.ExpiresAt
+						}
+						mu.Unlock()
+					} else if err != nil {
+						refreshErr = err
+					}
+				}
+			}
+
 			credential, ok := authFile.XAIRequestCredential()
 			if !ok {
 				mu.Lock()
@@ -119,36 +142,32 @@ func (a *App) FetchQuotas(list *AccountList) map[string]billing.Quota {
 				mu.Unlock()
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			type quotaResult struct {
-				quota billing.Quota
-				err   error
+
+			quota, quotaErr, tierErr := a.fetchAccountQuotaAndTier(clientVersion, credential)
+			if !refreshedOnce && (billing.IsUnauthorized(quotaErr) || billing.IsUnauthorized(tierErr)) {
+				if _, canRefresh := authFile.XAIRefreshCredential(); canRefresh {
+					if updated, _, err := a.RefreshAccount(context.Background(), account.ID, true); err == nil && updated != nil {
+						authFile = updated
+						mu.Lock()
+						list.Registry.Accounts[i].ExpiresAt = updated.Identity.ExpiresAt
+						if list.CurrentAccount == account.ID && list.CurrentIdentity != nil {
+							list.CurrentIdentity.ExpiresAt = updated.Identity.ExpiresAt
+						}
+						mu.Unlock()
+						if nextCred, ok := authFile.XAIRequestCredential(); ok {
+							quota, quotaErr, tierErr = a.fetchAccountQuotaAndTier(clientVersion, nextCred)
+						}
+					} else if err != nil {
+						refreshErr = err
+					}
+				}
 			}
-			type tierResult struct {
-				tier string
-				err  error
+
+			if quotaErr != nil {
+				quota.Error = formatQuotaError(quotaErr, refreshErr)
 			}
-			quotaCh := make(chan quotaResult, 1)
-			tierCh := make(chan tierResult, 1)
-			go func() {
-				quota, err := billing.Fetch(ctx, a.HTTPClient, a.BillingURL, clientVersion, credential.AccessToken, credential.UserID)
-				quotaCh <- quotaResult{quota: quota, err: err}
-			}()
-			go func() {
-				tier, err := billing.FetchTier(ctx, a.HTTPClient, a.UserURL, clientVersion, credential.AccessToken)
-				tierCh <- tierResult{tier: tier, err: err}
-			}()
-			quotaFetch := <-quotaCh
-			tierFetch := <-tierCh
-			cancel()
-			quota := quotaFetch.quota
-			if quotaFetch.err != nil {
-				quota.Error = quotaFetch.err.Error()
-			}
-			if tierFetch.err != nil {
-				quota.TierError = tierFetch.err.Error()
-			} else {
-				quota.Tier = tierFetch.tier
+			if tierErr != nil {
+				quota.TierError = formatQuotaError(tierErr, refreshErr)
 			}
 			mu.Lock()
 			results[account.ID] = quota
@@ -157,6 +176,44 @@ func (a *App) FetchQuotas(list *AccountList) map[string]billing.Quota {
 	}
 	wg.Wait()
 	return results
+}
+
+func (a *App) fetchAccountQuotaAndTier(clientVersion string, credential grokauth.RequestCredential) (billing.Quota, error, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	type quotaResult struct {
+		quota billing.Quota
+		err   error
+	}
+	type tierResult struct {
+		tier string
+		err  error
+	}
+	quotaCh := make(chan quotaResult, 1)
+	tierCh := make(chan tierResult, 1)
+	go func() {
+		quota, err := billing.Fetch(ctx, a.HTTPClient, a.BillingURL, clientVersion, credential.AccessToken, credential.UserID)
+		quotaCh <- quotaResult{quota: quota, err: err}
+	}()
+	go func() {
+		tier, err := billing.FetchTier(ctx, a.HTTPClient, a.UserURL, clientVersion, credential.AccessToken)
+		tierCh <- tierResult{tier: tier, err: err}
+	}()
+	quotaFetch := <-quotaCh
+	tierFetch := <-tierCh
+	quota := quotaFetch.quota
+	if tierFetch.err == nil {
+		quota.Tier = tierFetch.tier
+	}
+	return quota, quotaFetch.err, tierFetch.err
+}
+
+func formatQuotaError(serviceErr, refreshErr error) string {
+	if refreshErr != nil && billing.IsUnauthorized(serviceErr) {
+		return fmt.Sprintf("%s (auto-refresh failed: %v)", serviceErr.Error(), refreshErr)
+	}
+	return serviceErr.Error()
 }
 
 func (a *App) quotaAuthFile(accountID, currentID string) (*grokauth.File, error) {
